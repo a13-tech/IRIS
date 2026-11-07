@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IRIS 3D Viewer</title>
+<style>
+  :root { --bg:#eef1f4; --panel:#ffffffee; --ink:#1c2430; --mute:#5b6675; --line:#d5dbe3; --acc:#e8590c; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161a20; --panel:#20262eee; --ink:#e8ecf1; --mute:#9aa6b5; --line:#343c47; --acc:#ff8a3d; }
+  }
+  * { box-sizing: border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; overflow:hidden; }
+  #c { position:fixed; inset:0; width:100%; height:100%; display:block; }
+  .panel { position:fixed; left:12px; top:12px; width:min(290px, calc(100vw - 24px)); background:var(--panel);
+    border:1px solid var(--line); border-radius:12px; padding:12px 14px; backdrop-filter:blur(6px);
+    max-height:calc(100vh - 24px); overflow:auto; }
+  h1 { font-size:15px; margin:0 0 2px; letter-spacing:.02em; }
+  .sub { color:var(--mute); font-size:12px; margin-bottom:10px; }
+  h2 { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--mute); margin:12px 0 6px; }
+  label { display:flex; align-items:center; gap:8px; padding:3px 0; cursor:pointer; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; }
+  button { font:inherit; color:var(--ink); background:transparent; border:1px solid var(--line);
+    border-radius:8px; padding:6px 10px; cursor:pointer; min-height:34px; }
+  button:hover { border-color:var(--acc); }
+  button.on { background:var(--acc); border-color:var(--acc); color:#fff; }
+  input[type=range] { width:100%; accent-color:var(--acc); }
+  .hint { position:fixed; right:12px; bottom:10px; color:var(--mute); font-size:12px; text-align:right; }
+  .dim { color:var(--mute); font-size:12px; margin-top:8px; }
+  @media (max-width:560px){ .panel{ top:auto; bottom:12px; max-height:46vh; } .hint{ display:none; } }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="panel">
+  <h1>IRIS · Inventory Recognition &amp; Information System</h1>
+  <div class="sub">Casing 200 × 100 × 110 mm · 2 laci servo</div>
+
+  <h2>Laci (servo SG90)</h2>
+  <div class="row">
+    <button id="b1">Buka laci 1</button>
+    <button id="b2">Buka laci 2</button>
+  </div>
+
+  <h2>Tampilan</h2>
+  <label><input type="checkbox" id="vLid" checked> Tutup atas (LCD, tombol, LED)</label>
+  <label><input type="checkbox" id="vBody" checked> Badan elektronik</label>
+  <label><input type="checkbox" id="vMod" checked> Modul laci</label>
+  <label><input type="checkbox" id="vRef" checked> Komponen referensi (servo, LCD)</label>
+  <label><input type="checkbox" id="vGhost"> Tembus pandang</label>
+  <div style="margin-top:6px">Urai (explode)</div>
+  <input type="range" id="ex" min="0" max="100" value="0">
+
+  <h2>Sudut pandang</h2>
+  <div class="row">
+    <button data-v="top">Atas</button>
+    <button data-v="front">Depan</button>
+    <button data-v="side">Samping</button>
+    <button data-v="iso">3D</button>
+  </div>
+  <div class="dim">Pinion berputar 180° = laci keluar <span id="tr"></span> mm.</div>
+</div>
+<div class="hint">Seret: putar · Scroll: zoom · Klik kanan: geser</div>
+
+<script>/*THREE*/</script>
+<script>/*ORBIT*/</script>
+<script>
+const PARTS = /*PARTS*/;
+const CFG = /*CFG*/;
+
+function decode(b64) {
+  const bin = atob(b64), n = bin.length, u8 = new Uint8Array(n);
+  for (let i = 0; i < n; i++) u8[i] = bin.charCodeAt(i);
+  const i16 = new Int16Array(u8.buffer);
+  const f = new Float32Array(i16.length);
+  for (let i = 0; i < i16.length; i++) f[i] = i16[i] / 100;
+  return f;
+}
+
+THREE.Object3D.DefaultUp.set(0, 0, 1);
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(35, 1, 1, 3000);
+camera.up.set(0, 0, 1);
+const controls = new THREE.OrbitControls(camera, canvas);
+controls.enableDamping = true;
+const center = new THREE.Vector3(CFG.w / 2, CFG.d / 2, 55);
+controls.target.copy(center);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8892a0, 0.65));
+const dl = new THREE.DirectionalLight(0xffffff, 0.55); dl.position.set(-200, -300, 400); scene.add(dl);
+const dl2 = new THREE.DirectionalLight(0xffffff, 0.3); dl2.position.set(300, 200, 100); scene.add(dl2);
+
+function mkGeo(name) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(decode(PARTS[name]), 3));
+  g.computeVertexNormals();
+  return g;
+}
+const isDark = () => matchMedia('(prefers-color-scheme: dark)').matches;
+const mats = [];
+function mk(name, color, parent, opts = {}) {
+  const geo = mkGeo(name);
+  const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.55, metalness: 0.05,
+    polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1, transparent: true, opacity: 1 });
+  mat.userData.base = opts.opacity ?? 1;
+  mats.push(mat);
+  const mesh = new THREE.Mesh(geo, mat);
+  if (opts.edges !== false) {
+    mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo, 35),
+      new THREE.LineBasicMaterial({ color: 0x1c2430, transparent: true, opacity: 0.35 })));
+  }
+  parent.add(mesh);
+  return mesh;
+}
+
+const root = new THREE.Group(); scene.add(root);
+const gMod = new THREE.Group(), gBody = new THREE.Group(), gLid = new THREE.Group(), gRef = new THREE.Group();
+root.add(gMod, gBody, gLid, gRef);
+mk('module', 0x6b7b90, gMod, { edges: false });
+mk('body', 0x98a6b8, gBody, { edges: false });
+mk('lid', 0xb4c0cf, gLid, { edges: false });
+const gLcd = new THREE.Group(); gLid.add(gLcd);
+mk('lcd', 0x2e9e57, gLcd, { edges: false });
+
+const drawers = [];
+for (let i = 0; i < 2; i++) {
+  const x = CFG.bayc[i];
+  const dg = new THREE.Group(); dg.position.set(x, 0, 0); root.add(dg);
+  mk('drawer' + (i + 1), i ? 0x2f9e9a : 0xe8890c, dg);
+  mk('rack', 0xf1c40f, dg);
+  const sg = new THREE.Group(); sg.position.set(x, 0, 0); gRef.add(sg);
+  mk('servo', 0x2b6fd6, sg);
+  const pg = new THREE.Group(); pg.position.set(x + CFG.srv_x, CFG.srv_y, CFG.body_top); root.add(pg);
+  mk('pinion', 0xd6372f, pg);
+  drawers.push({ dg, pg, cur: 0, target: 0 });
+}
+
+// grid
+const grid = new THREE.GridHelper(500, 25, 0x8892a0, 0xc2c9d3);
+grid.rotation.x = Math.PI / 2; grid.position.set(CFG.w / 2, CFG.d / 2, -0.2);
+grid.material.transparent = true; grid.material.opacity = 0.35; scene.add(grid);
+
+const $ = id => document.getElementById(id);
+$('tr').textContent = CFG.travel.toFixed(1);
+['vLid','vBody','vMod','vRef'].forEach((id, k) => $(id).onchange = () => {
+  [gLid, gBody, gMod, gRef][k].visible = $(id).checked;
+  if (id === 'vRef') gLcd.visible = $(id).checked;
+});
+function applyGhost() {
+  const g = $('vGhost').checked;
+  for (const m of mats) m.opacity = g && m.userData.base === 1 && m.userData.ghostable ? 0.25 : 1;
+}
+// ghost only the shells
+[gMod, gBody, gLid].forEach(g => g.traverse(o => { if (o.material && o.material.userData) o.material.userData.ghostable = true; }));
+$('vGhost').onchange = applyGhost;
+
+function toggle(i) {
+  drawers[i].target = drawers[i].target > 0 ? 0 : CFG.travel;
+  $('b' + (i + 1)).classList.toggle('on', drawers[i].target > 0);
+  $('b' + (i + 1)).textContent = (drawers[i].target > 0 ? 'Tutup' : 'Buka') + ' laci ' + (i + 1);
+}
+$('b1').onclick = () => toggle(0);
+$('b2').onclick = () => toggle(1);
+
+function view(v) {
+  const d = 430, c = center.clone();
+  const p = { top: [c.x, c.y - 0.01, c.z + d + 80], front: [c.x, -d - 80, c.z + 20],
+              side: [c.x + d + 80, c.y, c.z + 20], iso: [c.x - 260, -330, 240] }[v];
+  camera.position.set(...p); controls.target.copy(c); controls.update();
+}
+document.querySelectorAll('[data-v]').forEach(b => b.onclick = () => view(b.dataset.v));
+view('iso');
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize); resize();
+
+function bg() { renderer.setClearColor(isDark() ? 0x161a20 : 0xeef1f4); }
+bg(); matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', bg);
+
+function tick() {
+  const e = $('ex').value / 100;
+  gLid.position.z = e * 70; gBody.position.z = e * 30; gRef.position.z = 0;
+  for (const d of drawers) {
+    d.cur += (d.target - d.cur) * 0.12;
+    if (Math.abs(d.target - d.cur) < 0.01) d.cur = d.target;
+    d.dg.position.y = -d.cur;
+    d.pg.rotation.z = d.cur / CFG.pr;
+  }
+  controls.update();
+  renderer.render(scene, camera);
+  requestAnimationFrame(tick);
+}
+tick();
+window.__iris = { toggle, view, drawers };
+</script>
+</body>
+</html>
